@@ -190,6 +190,7 @@ class LightGCN(nn.Module):
         pos_e = self.pooling(pos_gcn_embs)
         neg_e = self.pooling(neg_gcn_embs.view(-1, neg_gcn_embs.shape[2], neg_gcn_embs.shape[3])).view(batch_size, self.K, -1)
 
+        import pdb; pdb.set_trace()
         pos_scores = torch.sum(torch.mul(u_e, pos_e), axis=1)
         neg_scores = torch.sum(torch.mul(u_e.unsqueeze(dim=1), neg_e), axis=-1)  # [batch_size, K]
 

@@ -1,12 +1,13 @@
 '''
 Created on October 1, 2020
-
 @author: Tinglin Huang (huangtinglin@outlook.com)
 '''
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from numpy.random import beta
+import random
+from .experiment_configs import mixup_params
 
 class NGCF(nn.Module):
     def __init__(self, data_config, args_config, adj_mat):
@@ -22,6 +23,11 @@ class NGCF(nn.Module):
         self.mess_dropout_rate = args_config.mess_dropout_rate
         self.edge_dropout = args_config.edge_dropout
         self.edge_dropout_rate = args_config.edge_dropout_rate
+
+        self.exp_num = args_config.exp_num
+        self.save_output = args_config.save_output
+        self.experiment_param = mixup_params[self.exp_num]
+
         self.pool = args_config.pool
         self.n_negs = args_config.n_negs
         self.ns = args_config.ns
@@ -83,15 +89,114 @@ class NGCF(nn.Module):
         out = torch.sparse.FloatTensor(i, v, x.shape).to(x.device)
         return out * (1. / (1 - rate))
 
-    def create_bpr_loss(self, user_gcn_emb, pos_gcn_embs, neg_gcn_embs):
+    def mixup(self, u_e, pos_e, neg_e, user):
+        user_idxs, user_counts = torch.unique(user, return_counts=True)
+        loss_sum = 0
+        param = self.experiment_param
+        gamma = beta(param['alpha'], param['alpha'])
+        
+        label_pos_neg = gamma if param['alpha_gt'] else 0
+        label_pos = max(gamma, 1-gamma) if param['alpha_gt'] else 0
+        if param['neg_mixup'] or param['pos_mixup']:            
+            loss_neg_mix = 0
+            multi_users = user_idxs[user_counts>1]
+            if multi_users.shape[0] > 0:
+                for u_idx in multi_users:
+                    item_idxs = (user == u_idx).nonzero().squeeze(1)
+                    sampled_neg_e = neg_e[item_idxs][:2]
+                    sampled_pos_e = pos_e[item_idxs][:2]
+ 
+                    if param['neg_mixup']:
+                        # Item neg_mix
+                        neg_mix = sampled_neg_e[0] * gamma + sampled_neg_e[1] * (1 - gamma)
+                        neg_mix = neg_mix.requires_grad_(True)
+
+                        neg_scores = torch.dot(u_e[item_idxs[0]], neg_mix.squeeze(0)) 
+                            # doesnt matter whether its first one or second one
+                        loss_sum += torch.log(1 + torch.exp(neg_scores)) /  neg_e.shape[0]                   
+
+                        gradx = torch.autograd.grad(neg_scores, neg_mix, create_graph=True)[0].view(neg_mix.shape[0], -1)
+                        x_d = (sampled_neg_e[0] - sampled_neg_e[1]).view(neg_mix.shape[0], -1)
+                        grad_inn = (gradx * x_d).sum(1).view(-1)
+                        loss_grad = torch.abs(grad_inn.mean())
+                        loss_sum += loss_grad /  neg_e.shape[0]                   
+
+                    if param['pos_mixup']:
+                        # Item neg_mix
+                        pos_mix = sampled_pos_e[0] * gamma + sampled_pos_e[1] * (1 - gamma)
+                        pos_mix = pos_mix.requires_grad_(True)
+
+                        pos_scores = torch.dot(u_e[item_idxs[0]], pos_mix.squeeze(0)) 
+                            # doesnt matter whether its first one or second one
+                        pos_scores = label_pos - pos_scores
+                        loss_sum += torch.log(1 + torch.exp(pos_scores)) /  pos_e.shape[0]                   
+
+                        gradx = torch.autograd.grad(pos_scores, pos_mix, create_graph=True)[0].view(pos_mix.shape[0], -1)
+                        x_d = (sampled_neg_e[0] - sampled_neg_e[1]).view(pos_mix.shape[0], -1)
+                        grad_inn = (gradx * x_d).sum(1).view(-1)
+                        loss_grad = torch.abs(grad_inn.mean())
+                        loss_sum += loss_grad /  pos_e.shape[0]                   
+        if 'single_mix_weight' in param.keys():
+            loss_sum = loss_sum * param['single_mix_weight']
+
+        if param['pos_neg_mix']:
+            # Item neg_mix
+            sampled_idxs = random.sample(list(range(u_e.shape[0])), k=int(u_e.shape[0]* param['random_sample']))
+            samp_u_e, samp_pos_e, samp_neg_e = u_e[sampled_idxs] , pos_e[sampled_idxs], neg_e[sampled_idxs].squeeze(1)            
+            for u, p, n in zip(samp_u_e, samp_pos_e, samp_neg_e): 
+                pos_neg_mix = p * gamma + n * (1 - gamma)
+                pos_neg_mix = pos_neg_mix.requires_grad_(True)
+
+                # pos_neg_scores = torch.sum(torch.mul(samp_u_e, pos_neg_mix), axis=1) 
+                pos_neg_scores = torch.dot(u, pos_neg_mix.squeeze(0))                       
+                    # doesnt matter whether its first one or second one
+                pos_neg_scores = label_pos_neg - pos_neg_scores
+                loss_sum += torch.log(1 + torch.exp(pos_neg_scores)) /  pos_e.shape[0]                   
+
+                gradx = torch.autograd.grad(pos_neg_scores, pos_neg_mix, create_graph=True)[0].view(pos_mix.shape[0], -1)
+                x_d = (p - n).view(pos_neg_mix.shape[0], -1)
+
+                grad_inn = (gradx * x_d).sum(1).view(-1)
+                loss_grad = torch.abs(grad_inn.mean())
+                loss_sum += loss_grad /  pos_e.shape[0]                   
+
+        return loss_sum * self.experiment_param['lambda_mix']
+
+    def fair_reg(self, pos_scores, neg_scores):
+        loss_gap = torch.mean(pos_scores) - torch.mean(neg_scores)
+
+        return loss_gap * self.experiment_param['lambda_fair']
+
+    def create_bpr_loss(self, user_gcn_emb, pos_gcn_embs, neg_gcn_embs, user=None):
         batch_size = user_gcn_emb.shape[0]
+        loss = 0
 
         u_e = self.pooling(user_gcn_emb)
         pos_e = self.pooling(pos_gcn_embs)
         neg_e = self.pooling(neg_gcn_embs.view(-1, neg_gcn_embs.shape[2], neg_gcn_embs.shape[3])).view(batch_size, self.K, -1)
 
+        mixup_loss = None
+        if self.experiment_param['mixup']:
+            mixup_loss = self.mixup(u_e, pos_e, neg_e, user)
+            loss += mixup_loss
+
         pos_scores = torch.sum(torch.mul(u_e, pos_e), axis=1)
         neg_scores = torch.sum(torch.mul(u_e.unsqueeze(dim=1), neg_e), axis=-1)  # [batch_size, K]
+
+        fair_loss = None
+        if self.experiment_param['fair']:
+            fair_loss = self.fair_reg(pos_scores, neg_scores)
+            loss += fair_loss
+
+        if self.save_output:
+            # import pdb; pdb.set_trace()
+            pos = " ".join([str(round(s, 3)) for s in pos_scores.detach().cpu().numpy().tolist()])
+            neg = " ".join([str(round(s, 3)) for s in neg_scores.detach().cpu().numpy().tolist()])
+
+            with open('./model_pos_output.txt', 'a') as f:
+                f.write(pos)
+            with open('./model_neg_output.txt', 'a') as f:
+                f.write(neg)
 
         # mf_loss = -1 * torch.mean(nn.LogSigmoid()(pos_scores - neg_scores))
         # mf_loss = torch.mean(nn.functional.softplus((neg_scores - pos_scores.unsqueeze(dim=1)).view(-1)))
@@ -103,7 +208,11 @@ class NGCF(nn.Module):
                        + torch.norm(neg_gcn_embs[:, :, 0, :]) ** 2) / 2  # take hop=0
         emb_loss = self.decay * regularize / batch_size
 
-        return mf_loss + emb_loss, mf_loss, emb_loss
+        loss += mf_loss + emb_loss
+
+        # print(f"mf_loss {mf_loss}, emb_loss {emb_loss}, mixup {mixup_loss}, fair {fair_loss}")
+        # import pdb; pdb.set_trace()
+        return loss, mf_loss, emb_loss, mixup_loss, fair_loss
 
     def rating(self, u_g_embeddings, pos_i_g_embeddings):
         return torch.matmul(u_g_embeddings, pos_i_g_embeddings.t())
@@ -188,7 +297,6 @@ class NGCF(nn.Module):
         user = batch['users']
         pos_item = batch['pos_items']
         neg_item = batch['neg_items']
-
         user_gcn_emb, item_gcn_emb = self.gcn(edge_dropout=self.edge_dropout,
                                               mess_dropout=self.mess_dropout)
         pos_gcn_embs = item_gcn_emb[pos_item]
@@ -203,4 +311,4 @@ class NGCF(nn.Module):
                                                            pos_item))
             neg_gcn_embs = torch.stack(neg_gcn_embs, dim=1)
 
-        return self.create_bpr_loss(user_gcn_emb[user], pos_gcn_embs, neg_gcn_embs)
+        return self.create_bpr_loss(user_gcn_emb[user], pos_gcn_embs, neg_gcn_embs, user)

@@ -40,7 +40,9 @@ def parse_args():
                         help='Specify the test type from {part, full}, indicating whether the reference is done in mini-batch')
 
     parser.add_argument("--context_hops", type=int, default=3, help="hop")
-
+    parser.add_argument("--exp_num", type=int, default=0, help="Experiment Number based on ")
+    parser.add_argument("--save_output", type=bool, default=False, help="use manifold mixup or not")
+    
     # ===== save model ===== #
     parser.add_argument("--save", type=bool, default=False, help="save model or not")
     parser.add_argument(

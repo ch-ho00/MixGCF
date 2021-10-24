@@ -30,10 +30,11 @@ def read_cf_yelp2018(file_name):
     return np.array(inter_mat)
 
 
-def statistics(train_data, valid_data, test_data,postfix=''):
+def statistics(train_data, valid_data, test_data):
     global n_users, n_items
     n_users = max(max(train_data[:, 0]), max(valid_data[:, 0]), max(test_data[:, 0])) + 1
     n_items = max(max(train_data[:, 1]), max(valid_data[:, 1]), max(test_data[:, 1])) + 1
+
     if dataset != 'yelp2018':
         n_items -= n_users
         # remap [n_users, n_users+n_items] to [0, n_items]
@@ -98,10 +99,8 @@ def load_data(model_args):
         read_cf = read_cf_amazon
 
     print('reading train and test user-item set ...')
-    
     train_cf = read_cf(directory + 'train.txt')
     test_cf = read_cf(directory + 'test.txt')
-
     if args.dataset != 'yelp2018':
         valid_cf = read_cf(directory + 'valid.txt')
     else:

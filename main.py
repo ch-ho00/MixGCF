@@ -105,7 +105,7 @@ if __name__ == '__main__':
                                   s, s + args.batch_size,
                                   n_negs)
 
-            batch_loss, _, _ = model(batch)
+            batch_loss, _, _, _ ,_ = model(batch)
 
             optimizer.zero_grad()
             batch_loss.backward()

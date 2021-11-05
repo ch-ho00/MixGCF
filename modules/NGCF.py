@@ -7,7 +7,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from numpy.random import beta
 import random
-from .experiment_configs import mixup_params
 
 class NGCF(nn.Module):
     def __init__(self, data_config, args_config, adj_mat):
@@ -16,6 +15,7 @@ class NGCF(nn.Module):
         self.n_items = data_config['n_items']
         self.adj_mat = adj_mat
 
+        self.args = args_config
         self.decay = args_config.l2
         self.emb_size = args_config.dim
         self.context_hops = args_config.context_hops
@@ -24,9 +24,9 @@ class NGCF(nn.Module):
         self.edge_dropout = args_config.edge_dropout
         self.edge_dropout_rate = args_config.edge_dropout_rate
 
-        self.exp_num = args_config.exp_num
+        self.root_dir = args_config.root_dir
+        self.expname = args_config.expname
         self.save_output = args_config.save_output
-        self.experiment_param = mixup_params[self.exp_num]
 
         self.pool = args_config.pool
         self.n_negs = args_config.n_negs
@@ -92,21 +92,21 @@ class NGCF(nn.Module):
     def mixup(self, u_e, pos_e, neg_e, user):
         user_idxs, user_counts = torch.unique(user, return_counts=True)
         loss_sum = 0
-        param = self.experiment_param
-        gamma = beta(param['alpha'], param['alpha'])
+        gamma = beta(self.args.alpha, self.args.alpha)
         
-        label_pos_neg = gamma if param['alpha_gt'] else 0
-        label_pos = max(gamma, 1-gamma) if param['alpha_gt'] else 0
-        if param['neg_mixup'] or param['pos_mixup']:            
+        label_pos_neg = gamma if self.args.alpha_gt else 0
+        label_pos = max(gamma, 1-gamma) if self.args.alpha_gt else 0
+        if self.args.neg_mixup or self.args.pos_mixup:            
             loss_neg_mix = 0
             multi_users = user_idxs[user_counts>1]
             if multi_users.shape[0] > 0:
                 for u_idx in multi_users:
                     item_idxs = (user == u_idx).nonzero().squeeze(1)
-                    sampled_neg_e = neg_e[item_idxs][:2]
-                    sampled_pos_e = pos_e[item_idxs][:2]
+                    sample = torch.randperm(item_idxs.shape[0])[:2]
+                    sampled_neg_e = neg_e[item_idxs][sample]
+                    sampled_pos_e = pos_e[item_idxs][torch.randperm(item_idxs.shape[0])[sample]]
  
-                    if param['neg_mixup']:
+                    if self.args.neg_mixup:
                         # Item neg_mix
                         neg_mix = sampled_neg_e[0] * gamma + sampled_neg_e[1] * (1 - gamma)
                         neg_mix = neg_mix.requires_grad_(True)
@@ -121,7 +121,7 @@ class NGCF(nn.Module):
                         loss_grad = torch.abs(grad_inn.mean())
                         loss_sum += loss_grad /  neg_e.shape[0]                   
 
-                    if param['pos_mixup']:
+                    if self.args.pos_mixup:
                         # Item neg_mix
                         pos_mix = sampled_pos_e[0] * gamma + sampled_pos_e[1] * (1 - gamma)
                         pos_mix = pos_mix.requires_grad_(True)
@@ -136,12 +136,12 @@ class NGCF(nn.Module):
                         grad_inn = (gradx * x_d).sum(1).view(-1)
                         loss_grad = torch.abs(grad_inn.mean())
                         loss_sum += loss_grad /  pos_e.shape[0]                   
-        if 'single_mix_weight' in param.keys():
-            loss_sum = loss_sum * param['single_mix_weight']
+        # if 'single_mix_weight' in self.args.keys():
+        #     loss_sum = loss_sum * self.args['single_mix_weight']
 
-        if param['pos_neg_mix']:
+        if self.args.pos_neg_mixup:
             # Item neg_mix
-            sampled_idxs = random.sample(list(range(u_e.shape[0])), k=int(u_e.shape[0]* param['random_sample']))
+            sampled_idxs = random.sample(list(range(u_e.shape[0])), k=int(u_e.shape[0]* self.args.random_sample))
             samp_u_e, samp_pos_e, samp_neg_e = u_e[sampled_idxs] , pos_e[sampled_idxs], neg_e[sampled_idxs].squeeze(1)            
             for u, p, n in zip(samp_u_e, samp_pos_e, samp_neg_e): 
                 pos_neg_mix = p * gamma + n * (1 - gamma)
@@ -160,12 +160,12 @@ class NGCF(nn.Module):
                 loss_grad = torch.abs(grad_inn.mean())
                 loss_sum += loss_grad /  pos_e.shape[0]                   
 
-        return loss_sum * self.experiment_param['lambda_mix']
+        return loss_sum * self.args.lambda_mix
 
     def fair_reg(self, pos_scores, neg_scores):
         loss_gap = torch.mean(pos_scores) - torch.mean(neg_scores)
 
-        return loss_gap * self.experiment_param['lambda_fair']
+        return loss_gap * self.args.lambda_fair
 
     def create_bpr_loss(self, user_gcn_emb, pos_gcn_embs, neg_gcn_embs, user=None):
         batch_size = user_gcn_emb.shape[0]
@@ -175,27 +175,27 @@ class NGCF(nn.Module):
         pos_e = self.pooling(pos_gcn_embs)
         neg_e = self.pooling(neg_gcn_embs.view(-1, neg_gcn_embs.shape[2], neg_gcn_embs.shape[3])).view(batch_size, self.K, -1)
 
-        mixup_loss = None
-        if self.experiment_param['mixup']:
+        mixup_loss = 0
+        if self.args.mixup:
             mixup_loss = self.mixup(u_e, pos_e, neg_e, user)
             loss += mixup_loss
 
         pos_scores = torch.sum(torch.mul(u_e, pos_e), axis=1)
         neg_scores = torch.sum(torch.mul(u_e.unsqueeze(dim=1), neg_e), axis=-1)  # [batch_size, K]
 
-        fair_loss = None
-        if self.experiment_param['fair']:
+        fair_loss = 0
+        if self.args.fair:
             fair_loss = self.fair_reg(pos_scores, neg_scores)
             loss += fair_loss
 
-        if self.save_output:
+        if self.save_output and (writer_dict['train_global_steps'] % 500):
             # import pdb; pdb.set_trace()
-            pos = " ".join([str(round(s, 3)) for s in pos_scores.detach().cpu().numpy().tolist()])
-            neg = " ".join([str(round(s, 3)) for s in neg_scores.detach().cpu().numpy().tolist()])
+            pos =  writer_dict['train_global_steps']+ " " + " ".join([str(round(s, 3)) for s in pos_scores.detach().cpu().numpy().tolist()])
+            neg =  writer_dict['train_global_steps']+ " "+ " ".join([str(round(s, 3)) for s in neg_scores.detach().cpu().numpy().tolist()])
 
-            with open('./model_pos_output.txt', 'a') as f:
+            with open(f'{self.root_dir}/{self.args.expnum}/{args.expname}_pos.txt', 'a') as f:
                 f.write(pos)
-            with open('./model_neg_output.txt', 'a') as f:
+            with open(f'{self.root_dir}/{self.args.exp_num}/{args.expname}_neg.txt', 'a') as f:
                 f.write(neg)
 
         # mf_loss = -1 * torch.mean(nn.LogSigmoid()(pos_scores - neg_scores))

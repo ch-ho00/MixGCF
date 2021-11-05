@@ -14,9 +14,28 @@ from utils.parser import parse_args
 from utils.data_loader import load_data
 from utils.evaluate import test
 from utils.helper import early_stopping
+from tensorboardX import SummaryWriter
+from pathlib import Path
 
 n_users = 0
 n_items = 0
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count if self.count != 0 else 0
 
 
 def get_feed_dict(train_entity_pairs, train_pos_set, start, end, n_negs=1):
@@ -47,6 +66,7 @@ def get_feed_dict(train_entity_pairs, train_pos_set, start, end, n_negs=1):
 
 if __name__ == '__main__':
     """fix the random seed"""
+
     seed = 2020
     random.seed(seed)
     np.random.seed(seed)
@@ -58,7 +78,29 @@ if __name__ == '__main__':
     """read args"""
     global args, device
     args = parse_args()
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu_id)
+    
+    args.expname = "_".join([str(args.dataset),
+                            str(args.pool),
+                            str(args.alpha), 
+                            str(args.alpha_gt),
+                            str(args.neg_mixup),
+                            str(args.pos_mixup), 
+                            str(args.pos_neg_mixup), 
+                            str(args.lambda_mix * 10000), 
+                            str(args.lambda_fair * 10000)])
+
+    args.out_dir = Path(os.path.join(args.root_dir, str(args.expnum)))
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    tensorboard_log_dir = Path(os.path.join(args.root_dir, str(args.expnum), 'log'))
+    tensorboard_log_dir.mkdir(parents=True, exist_ok=True)
+    global writer_dict
+    writer_dict = {
+        'writer': SummaryWriter(comment=args.expname,log_dir=tensorboard_log_dir),
+        'train_global_steps': 0,
+        'valid_global_steps': 0,
+    }
+    # os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu_id)
     device = torch.device("cuda:0") if args.cuda else torch.device("cpu")
 
     """build dataset"""
@@ -87,6 +129,7 @@ if __name__ == '__main__':
     should_stop = False
 
     print("start training ...")
+
     for epoch in range(args.epoch):
         # shuffle training data
         train_cf_ = train_cf
@@ -94,18 +137,25 @@ if __name__ == '__main__':
         np.random.shuffle(index)
         train_cf_ = train_cf_[index].to(device)
 
+        loss_meter = AverageMeter()
+        emb_meter = AverageMeter()
+        mf_meter = AverageMeter()
+        mixup_meter = AverageMeter()
+        fair_meter = AverageMeter()
+
         """training"""
         model.train()
         loss, s = 0, 0
         hits = 0
         train_s_t = time()
         while s + args.batch_size <= len(train_cf):
+            writer_dict['train_global_steps'] = writer_dict['train_global_steps'] + 1
             batch = get_feed_dict(train_cf_,
                                   user_dict['train_user_set'],
                                   s, s + args.batch_size,
                                   n_negs)
 
-            batch_loss, _, _, _ ,_ = model(batch)
+            batch_loss, mf_loss, emb_loss, mixup_loss, fair_loss = model(batch)
 
             optimizer.zero_grad()
             batch_loss.backward()
@@ -113,6 +163,19 @@ if __name__ == '__main__':
 
             loss += batch_loss
             s += args.batch_size
+
+            loss_meter.update(batch_loss.item(), args.batch_size)
+            mf_meter.update(mf_loss.item(), args.batch_size)
+            emb_meter.update(emb_loss.item(), args.batch_size)
+            mixup_meter.update(mixup_loss.item(), args.batch_size)
+            fair_meter.update(fair_loss.item(), args.batch_size)
+
+            if writer_dict['train_global_steps'] % 100 == 0:
+                writer_dict['writer'].add_scalar('train_loss', loss_meter.avg, writer_dict['train_global_steps'])
+                writer_dict['writer'].add_scalar('train_mf', mf_meter.avg, writer_dict['train_global_steps'])
+                writer_dict['writer'].add_scalar('train_emb', emb_meter.avg, writer_dict['train_global_steps'])
+                writer_dict['writer'].add_scalar('train_mixup', mixup_meter.avg, writer_dict['train_global_steps'])
+                writer_dict['writer'].add_scalar('train_fair', fair_meter.avg, writer_dict['train_global_steps'])
 
         train_e_t = time()
 
@@ -130,6 +193,11 @@ if __name__ == '__main__':
                 [epoch, train_e_t - train_s_t, test_e_t - test_s_t, loss.item(), test_ret['recall'], test_ret['ndcg'],
                  test_ret['precision'], test_ret['hit_ratio']])
 
+            writer_dict['writer'].add_scalar('test_recall', test_ret['recall'], writer_dict['train_global_steps'])
+            writer_dict['writer'].add_scalar('test_ndcg', test_ret['ndcg'], writer_dict['train_global_steps'])
+            writer_dict['writer'].add_scalar('test_hit_ratio', test_ret['hit_ratio'], writer_dict['train_global_steps'])
+            writer_dict['writer'].add_scalar('test_precision', test_ret['precision'], writer_dict['train_global_steps'])
+
             if user_dict['valid_user_set'] is None:
                 valid_ret = test_ret
             else:
@@ -139,7 +207,13 @@ if __name__ == '__main__':
                 train_res.add_row(
                     [epoch, train_e_t - train_s_t, test_e_t - test_s_t, loss.item(), valid_ret['recall'], valid_ret['ndcg'],
                      valid_ret['precision'], valid_ret['hit_ratio']])
-            print(train_res)
+
+                writer_dict['writer'].add_scalar('val_recall', valid_ret['recall'], writer_dict['train_global_steps'])
+                writer_dict['writer'].add_scalar('val_ndcg', valid_ret['ndcg'], writer_dict['train_global_steps'])
+                writer_dict['writer'].add_scalar('val_hit_ratio', valid_ret['hit_ratio'], writer_dict['train_global_steps'])
+                writer_dict['writer'].add_scalar('test_precision', valid_ret['precision'], writer_dict['train_global_steps'])
+
+            # print(train_res)
 
             # *********************************************************
             # early stopping when cur_best_pre_0 is decreasing for 10 successive steps.
@@ -151,7 +225,7 @@ if __name__ == '__main__':
 
             """save weight"""
             if valid_ret['recall'][0] == cur_best_pre_0 and args.save:
-                torch.save(model.state_dict(), args.out_dir + 'model_' + '.ckpt')
+                torch.save(model.state_dict(), os.path.join(args.out_dir, args.expnum, 'weight',  str(writer_dict['train_global_steps'])+'.ckpt'))
         else:
             # logging.info('training loss at epoch %d: %f' % (epoch, loss.item()))
             print('using time %.4fs, training loss at epoch %d: %.4f' % (train_e_t - train_s_t, epoch, loss.item()))

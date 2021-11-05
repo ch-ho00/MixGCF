@@ -42,7 +42,21 @@ def parse_args():
     parser.add_argument("--context_hops", type=int, default=3, help="hop")
     parser.add_argument("--exp_num", type=int, default=0, help="Experiment Number based on ")
     parser.add_argument("--save_output", type=bool, default=False, help="use manifold mixup or not")
-    
+    #### new arguments
+    # parser.add_argument("--expname", type=str ,required=True, help="experiment name")
+    parser.add_argument('--alpha', type=float, default=0, help='l2 regularization weight, 1e-5 for NGCF')
+    parser.add_argument('--alpha_gt', type=float, default=0, help='l2 regularization weight, 1e-5 for NGCF')
+    parser.add_argument('--neg_mixup', type=bool, default=False, help='learning rate')
+    parser.add_argument('--pos_mixup', type=bool, default=False, help='l2 regularization weight')
+    parser.add_argument('--pos_neg_mixup', type=bool, default=False, help='learning rate')
+    parser.add_argument('--lambda_mix', type=float, default=1e-4, help='lambda mix error loss weight')
+    parser.add_argument('--lambda_fair', type=float, default=1e-4, help='lambda fair error loss weight')
+    parser.add_argument('--fair', type=int, default=0, help='lambda mix error loss weight')
+    parser.add_argument('--mixup', type=int, default=0, help='lambda fair error loss weight')
+    parser.add_argument('--random_sample', type=float, default=0, help='lambda fair error loss weight')
+    parser.add_argument('--expnum', type=int, default=0, help='lambda fair error loss weight')
+    parser.add_argument('--root_dir', type=str, default='./experiments', help='lambda fair error loss weight')
+
     # ===== save model ===== #
     parser.add_argument("--save", type=bool, default=False, help="save model or not")
     parser.add_argument(

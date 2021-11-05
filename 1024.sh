@@ -1,1 +1,20 @@
-python main.py --dataset ali --dim 64 --lr 0.001 --batch_size 4096 --gpu_id 7 --context_hops 3 --pool mean --ns mixgcf --K 1 --n_negs 32 --save True --out_dir './result/' --save_output True
+python main.py --dataset ali --dim 64 \
+                --l2 0.00001 \ 
+                --lr 0.001  \
+                --batch_size 4096 \
+                --gpu_id 7 \
+                --context_hops 3 \
+                --pool mean \
+                --ns mixgcf \
+                --K 1 \
+                --n_negs 32 \
+                --save True \
+                --out_dir './result/' \
+                --save_output True \
+                --expname test \
+                --alpha_gt  \
+                --neg_mixup	\
+                --pos_mixup	 \
+                --pos_neg_mixup \	
+                --lambda_mix	\
+                --lambda_fair   \

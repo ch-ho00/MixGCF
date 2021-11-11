@@ -151,6 +151,7 @@ if __name__ == '__main__':
 
             """save weight"""
             if valid_ret['recall'][0] == cur_best_pre_0 and args.save:
+                os.makedirs(args.out_dir, exist_ok=True)
                 torch.save(model.state_dict(), args.out_dir + 'model_' + '.ckpt')
         else:
             # logging.info('training loss at epoch %d: %f' % (epoch, loss.item()))

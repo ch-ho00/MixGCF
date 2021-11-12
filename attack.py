@@ -15,8 +15,21 @@ from utils.data_loader import load_data
 from utils.evaluate import test
 from utils.helper import early_stopping
 
+import torch.nn as nn
+
 n_users = 0
 n_items = 0
+
+class Attack(nn.Module):
+    def __init__(self, n_users, emb_size):
+        super(Attack, self).__init__()
+        initializer = nn.init.xavier_uniform_
+        attack_e_u = initializer(torch.empty(n_users, emb_size))
+        self.attack_e_u = nn.Parameter(attack_e_u)
+
+    def forward(self,x):
+        return x + self.attack_e_u
+
 
 
 def get_feed_dict(train_entity_pairs, train_pos_set, start, end, n_negs=1):
@@ -79,12 +92,56 @@ if __name__ == '__main__':
     else:
         model = NGCF(n_params, args, norm_mat).to(device)
 
+    # load the well train model
+    # pretrain_path = './weight/XX.ct'
+    if args.pretrain_path is not None:
+        model.load_state_dict(torch.load(args.pretrain_path))
+
+    # define attack parameters:
+    lambda_a = 1
+
+    attack = Attack(model.n_users, model.emb_size)
+    attack.to(device)
+
+    model.user_embed_init = torch.empty(model.n_users, model.emb_size).to(device)
+    model.user_embed_init.data.copy_(model.user_embed_init.data)
+
     """define optimizer"""
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    # update the attack only
+    optimizer = torch.optim.Adam(attack.parameters(), lr=args.lr)
 
     cur_best_pre_0 = 0
     stopping_step = 0
     should_stop = False
+
+
+    # """Test before training"""
+    #
+    # """testing"""
+    #
+    # train_res = PrettyTable()
+    # train_res.field_names = ["Start", "recall", "ndcg", "precision",
+    #                          "hit_ratio"]
+    #
+    # model.eval()
+    # test_s_t = time()
+    # test_ret = test(model, user_dict, n_params, mode='test')
+    # test_e_t = time()
+    # train_res.add_row(
+    #     ['test start', test_ret['recall'], test_ret['ndcg'],
+    #      test_ret['precision'], test_ret['hit_ratio']])
+    #
+    # if user_dict['valid_user_set'] is None:
+    #     valid_ret = test_ret
+    # else:
+    #     test_s_t = time()
+    #     valid_ret = test(model, user_dict, n_params, mode='valid')
+    #     test_e_t = time()
+    #     train_res.add_row(
+    #         ['valid start', valid_ret['recall'], valid_ret['ndcg'],
+    #          valid_ret['precision'], valid_ret['hit_ratio']])
+    # print(train_res)
+
 
     print("start training ...")
     for epoch in range(args.epoch):
@@ -95,7 +152,13 @@ if __name__ == '__main__':
         train_cf_ = train_cf_[index].to(device)
 
         """training"""
-        model.train()
+        # model.train()
+        model.eval()
+
+        # add the attack in the model
+        del model.user_embed
+        model.user_embed = attack(model.user_embed_init.detach())
+
         loss, s = 0, 0
         hits = 0
         train_s_t = time()
@@ -106,6 +169,8 @@ if __name__ == '__main__':
                                   n_negs)
 
             batch_loss, _, _ = model(batch)
+
+            batch_loss = -batch_loss + torch.norm(attack.attack_e_u, dim=1).mean() * lambda_a
 
             optimizer.zero_grad()
             batch_loss.backward()

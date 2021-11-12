@@ -79,7 +79,7 @@ if __name__ == '__main__':
 
     run = wandb.init(config=args,
                      project='COMP5331-MixGCF-Attack',
-                     name='attack_lightGCN'+args.dataset,
+                     name='attack_lightGCN'+args.dataset+'_restrict',
                      entity="xingzhi"
                      )
 
@@ -105,9 +105,9 @@ if __name__ == '__main__':
     # pretrain_path = './weight/XX.ct'
     if args.pretrain_path is not None:
         model.load_state_dict(torch.load(args.pretrain_path))
+        print('Successfully loading the previous model at', args.pretrain_path)
 
     # define attack parameters:
-    lambda_a = 1
 
     attack = Attack(model.n_users, model.emb_size)
     attack.to(device)
@@ -124,47 +124,47 @@ if __name__ == '__main__':
     should_stop = False
 
 
-    # """Test before training"""
+    # # """Test before training"""
+    # #
+    # # """testing"""
     #
-    # """testing"""
-
-    train_res = PrettyTable()
-    train_res.field_names = ["Start", "recall", "ndcg", "precision",
-                             "hit_ratio"]
-
-    model.eval()
-    test_s_t = time()
-    test_ret = test(model, user_dict, n_params, mode='test')
-    test_e_t = time()
-    train_res.add_row(
-        ['test start', test_ret['recall'], test_ret['ndcg'],
-         test_ret['precision'], test_ret['hit_ratio']])
-
-    wandb.log({'epoch': -1,
-               'loss': 0,
-               'recall_20': test_ret['recall'][0],
-               'recall_40': test_ret['recall'][1],
-               'recall_60': test_ret['recall'][2],
-               'ndcg_20': test_ret['ndcg'][0],
-               'ndcg_40': test_ret['ndcg'][1],
-               'ndcg_60': test_ret['ndcg'][2],
-               'precision_20': test_ret['precision'][0],
-               'precision_40': test_ret['precision'][1],
-               'precision_60': test_ret['precision'][2],
-               'hit_ratio_20': test_ret['hit_ratio'][0],
-               'hit_ratio_40': test_ret['hit_ratio'][1],
-               'hit_ratio_60': test_ret['hit_ratio'][2]})
-
-    if user_dict['valid_user_set'] is None:
-        valid_ret = test_ret
-    else:
-        test_s_t = time()
-        valid_ret = test(model, user_dict, n_params, mode='valid')
-        test_e_t = time()
-        train_res.add_row(
-            ['valid start', valid_ret['recall'], valid_ret['ndcg'],
-             valid_ret['precision'], valid_ret['hit_ratio']])
-    print(train_res)
+    # train_res = PrettyTable()
+    # train_res.field_names = ["Start", "recall", "ndcg", "precision",
+    #                          "hit_ratio"]
+    #
+    # model.eval()
+    # test_s_t = time()
+    # test_ret = test(model, user_dict, n_params, mode='test')
+    # test_e_t = time()
+    # train_res.add_row(
+    #     ['test start', test_ret['recall'], test_ret['ndcg'],
+    #      test_ret['precision'], test_ret['hit_ratio']])
+    #
+    # wandb.log({'epoch': -1,
+    #            'loss': 0,
+    #            'recall_20': test_ret['recall'][0],
+    #            'recall_40': test_ret['recall'][1],
+    #            'recall_60': test_ret['recall'][2],
+    #            'ndcg_20': test_ret['ndcg'][0],
+    #            'ndcg_40': test_ret['ndcg'][1],
+    #            'ndcg_60': test_ret['ndcg'][2],
+    #            'precision_20': test_ret['precision'][0],
+    #            'precision_40': test_ret['precision'][1],
+    #            'precision_60': test_ret['precision'][2],
+    #            'hit_ratio_20': test_ret['hit_ratio'][0],
+    #            'hit_ratio_40': test_ret['hit_ratio'][1],
+    #            'hit_ratio_60': test_ret['hit_ratio'][2]})
+    #
+    # if user_dict['valid_user_set'] is None:
+    #     valid_ret = test_ret
+    # else:
+    #     test_s_t = time()
+    #     valid_ret = test(model, user_dict, n_params, mode='valid')
+    #     test_e_t = time()
+    #     train_res.add_row(
+    #         ['valid start', valid_ret['recall'], valid_ret['ndcg'],
+    #          valid_ret['precision'], valid_ret['hit_ratio']])
+    # print(train_res)
 
 
     print("start training ...")
@@ -179,14 +179,20 @@ if __name__ == '__main__':
         # model.train()
         model.eval()
 
-        # add the attack in the model
-        del model.user_embed
-        model.user_embed = attack(model.user_embed_init.detach())
+
 
         loss, s = 0, 0
         hits = 0
         train_s_t = time()
         while s + args.batch_size <= len(train_cf):
+            # add the attack in the model
+            del model.user_embed
+            # model.user_embed = attack(model.user_embed_init.detach())
+            normalized_attack_e_u = attack.attack_e_u / torch.norm(attack.attack_e_u.detach(), dim=1, keepdim=True)
+            user_embed = model.user_embed_init.detach()
+            model.user_embed = user_embed + args.lambda_a * user_embed.norm(dim=1, keepdim=True) * normalized_attack_e_u
+
+
             batch = get_feed_dict(train_cf_,
                                   user_dict['train_user_set'],
                                   s, s + args.batch_size,
@@ -194,7 +200,7 @@ if __name__ == '__main__':
 
             batch_loss, _, _ = model(batch)
 
-            batch_loss = -batch_loss + torch.norm(attack.attack_e_u, dim=1).mean() * lambda_a
+            batch_loss = -batch_loss
 
             optimizer.zero_grad()
             batch_loss.backward()
@@ -202,6 +208,8 @@ if __name__ == '__main__':
 
             loss += batch_loss
             s += args.batch_size
+
+            # del normalized_attack_e_u, user_embed
 
         train_e_t = time()
 
@@ -246,18 +254,24 @@ if __name__ == '__main__':
                      valid_ret['precision'], valid_ret['hit_ratio']])
             print(train_res)
 
-            # *********************************************************
-            # early stopping when cur_best_pre_0 is decreasing for 10 successive steps.
-            cur_best_pre_0, stopping_step, should_stop = early_stopping(valid_ret['recall'][0], cur_best_pre_0,
-                                                                        stopping_step, expected_order='acc',
-                                                                        flag_step=10)
-            if should_stop:
-                break
+            # # *********************************************************
+            # # early stopping when cur_best_pre_0 is decreasing for 10 successive steps.
+            # cur_best_pre_0, stopping_step, should_stop = early_stopping(valid_ret['recall'][0], cur_best_pre_0,
+            #                                                             stopping_step, expected_order='acc',
+            #                                                             flag_step=10)
+            # if should_stop:
+            #     break
+            #
+            # """save weight"""
+            # if valid_ret['recall'][0] == cur_best_pre_0 and args.save:
+            #     os.makedirs(args.out_dir, exist_ok=True)
+            #     # torch.save(model.state_dict(), args.out_dir + 'model_' + '.ckpt')
+            #     '''save attack model'''
+            #     torch.save(attack.state_dict(), args.out_dir + 'attack_' + '.ckpt')
 
-            """save weight"""
-            if valid_ret['recall'][0] == cur_best_pre_0 and args.save:
+            # just save the model
+            if args.save:
                 os.makedirs(args.out_dir, exist_ok=True)
-                # torch.save(model.state_dict(), args.out_dir + 'model_' + '.ckpt')
                 '''save attack model'''
                 torch.save(attack.state_dict(), args.out_dir + 'attack_' + '.ckpt')
         else:

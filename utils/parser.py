@@ -51,6 +51,6 @@ def parse_args():
     parser.add_argument('--pretrain_path', type=str, default=None, help = 'The path to the pretrain model')
 
     # ==== attack model ==== #
-    parser.add_argument('--lambda_a', type=float, default=1, help='The coefficient for the regularization in the attack model')
+    parser.add_argument('--lambda_a', type=float, default=0.01, help='The coefficient for the regularization in the attack model')
 
     return parser.parse_args()

@@ -74,6 +74,15 @@ if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu_id)
     device = torch.device("cuda:0") if args.cuda else torch.device("cpu")
 
+    """Add the wandb weight and bias to record the experiments"""
+    import wandb
+
+    run = wandb.init(config=args,
+                     project='COMP5331-MixGCF-Attack',
+                     name='attack_lightGCN'+args.dataset,
+                     entity="xingzhi"
+                     )
+
     """build dataset"""
     train_cf, user_dict, n_params, norm_mat = load_data(args)
     train_cf_size = len(train_cf)
@@ -118,29 +127,44 @@ if __name__ == '__main__':
     # """Test before training"""
     #
     # """testing"""
-    #
-    # train_res = PrettyTable()
-    # train_res.field_names = ["Start", "recall", "ndcg", "precision",
-    #                          "hit_ratio"]
-    #
-    # model.eval()
-    # test_s_t = time()
-    # test_ret = test(model, user_dict, n_params, mode='test')
-    # test_e_t = time()
-    # train_res.add_row(
-    #     ['test start', test_ret['recall'], test_ret['ndcg'],
-    #      test_ret['precision'], test_ret['hit_ratio']])
-    #
-    # if user_dict['valid_user_set'] is None:
-    #     valid_ret = test_ret
-    # else:
-    #     test_s_t = time()
-    #     valid_ret = test(model, user_dict, n_params, mode='valid')
-    #     test_e_t = time()
-    #     train_res.add_row(
-    #         ['valid start', valid_ret['recall'], valid_ret['ndcg'],
-    #          valid_ret['precision'], valid_ret['hit_ratio']])
-    # print(train_res)
+
+    train_res = PrettyTable()
+    train_res.field_names = ["Start", "recall", "ndcg", "precision",
+                             "hit_ratio"]
+
+    model.eval()
+    test_s_t = time()
+    test_ret = test(model, user_dict, n_params, mode='test')
+    test_e_t = time()
+    train_res.add_row(
+        ['test start', test_ret['recall'], test_ret['ndcg'],
+         test_ret['precision'], test_ret['hit_ratio']])
+
+    wandb.log({'epoch': -1,
+               'loss': 0,
+               'recall_20': test_ret['recall'][0],
+               'recall_40': test_ret['recall'][1],
+               'recall_60': test_ret['recall'][2],
+               'ndcg_20': test_ret['ndcg'][0],
+               'ndcg_40': test_ret['ndcg'][1],
+               'ndcg_60': test_ret['ndcg'][2],
+               'precision_20': test_ret['precision'][0],
+               'precision_40': test_ret['precision'][1],
+               'precision_60': test_ret['precision'][2],
+               'hit_ratio_20': test_ret['hit_ratio'][0],
+               'hit_ratio_40': test_ret['hit_ratio'][1],
+               'hit_ratio_60': test_ret['hit_ratio'][2]})
+
+    if user_dict['valid_user_set'] is None:
+        valid_ret = test_ret
+    else:
+        test_s_t = time()
+        valid_ret = test(model, user_dict, n_params, mode='valid')
+        test_e_t = time()
+        train_res.add_row(
+            ['valid start', valid_ret['recall'], valid_ret['ndcg'],
+             valid_ret['precision'], valid_ret['hit_ratio']])
+    print(train_res)
 
 
     print("start training ...")
@@ -195,6 +219,22 @@ if __name__ == '__main__':
                 [epoch, train_e_t - train_s_t, test_e_t - test_s_t, loss.item(), test_ret['recall'], test_ret['ndcg'],
                  test_ret['precision'], test_ret['hit_ratio']])
 
+            ''' log the result to weight and bias wandb'''
+            wandb.log({'epoch':epoch,
+                       'loss':loss.item(),
+                       'recall_20':test_ret['recall'][0],
+                       'recall_40':test_ret['recall'][1],
+                       'recall_60':test_ret['recall'][2],
+                       'ndcg_20':test_ret['ndcg'][0],
+                       'ndcg_40':test_ret['ndcg'][1],
+                       'ndcg_60':test_ret['ndcg'][2],
+                       'precision_20':test_ret['precision'][0],
+                       'precision_40':test_ret['precision'][1],
+                       'precision_60':test_ret['precision'][2],
+                       'hit_ratio_20':test_ret['hit_ratio'][0],
+                       'hit_ratio_40':test_ret['hit_ratio'][1],
+                       'hit_ratio_60':test_ret['hit_ratio'][2]})
+
             if user_dict['valid_user_set'] is None:
                 valid_ret = test_ret
             else:
@@ -217,9 +257,12 @@ if __name__ == '__main__':
             """save weight"""
             if valid_ret['recall'][0] == cur_best_pre_0 and args.save:
                 os.makedirs(args.out_dir, exist_ok=True)
-                torch.save(model.state_dict(), args.out_dir + 'model_' + '.ckpt')
+                # torch.save(model.state_dict(), args.out_dir + 'model_' + '.ckpt')
+                '''save attack model'''
+                torch.save(attack.state_dict(), args.out_dir + 'attack_' + '.ckpt')
         else:
             # logging.info('training loss at epoch %d: %f' % (epoch, loss.item()))
             print('using time %.4fs, training loss at epoch %d: %.4f' % (train_e_t - train_s_t, epoch, loss.item()))
 
     print('early stopping at %d, recall@20:%.4f' % (epoch, cur_best_pre_0))
+    run.finish()

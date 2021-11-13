@@ -15,8 +15,20 @@ from utils.data_loader import load_data
 from utils.evaluate import test
 from utils.helper import early_stopping
 
+import torch.nn as nn
+
 n_users = 0
 n_items = 0
+
+class Attack(nn.Module):
+    def __init__(self, n_users, emb_size):
+        super(Attack, self).__init__()
+        initializer = nn.init.xavier_uniform_
+        attack_e_u = initializer(torch.empty(n_users, emb_size))
+        self.attack_e_u = nn.Parameter(attack_e_u)
+
+    def forward(self,x):
+        return x + self.attack_e_u
 
 
 def get_feed_dict(train_entity_pairs, train_pos_set, start, end, n_negs=1):
@@ -61,6 +73,15 @@ if __name__ == '__main__':
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu_id)
     device = torch.device("cuda:0") if args.cuda else torch.device("cpu")
 
+    """Add the wandb weight and bias to record the experiments"""
+    import wandb
+
+    run = wandb.init(config=args,
+                     project='COMP5331-MixGCF-Attack',
+                     name='defense_lightGCN'+args.dataset,
+                     entity="xingzhi"
+                     )
+
     """build dataset"""
     train_cf, user_dict, n_params, norm_mat = load_data(args)
     train_cf_size = len(train_cf)
@@ -78,6 +99,24 @@ if __name__ == '__main__':
         model = LightGCN(n_params, args, norm_mat).to(device)
     else:
         model = NGCF(n_params, args, norm_mat).to(device)
+
+    # load the well train model
+    # pretrain_path = './weight/XX.ct'
+    if args.pretrain_path is not None:
+        model.load_state_dict(torch.load(args.pretrain_path))
+        print('Successfully loading the previous model at', args.pretrain_path)
+
+    # define attack parameters:
+
+    attack = Attack(model.n_users, model.emb_size)
+    attack.to(device)
+
+    if args.pretrain_attack_path is not None:
+        attack.load_state_dict(torch.load(args.pretrain_attack_path))
+        print('Successfully loading the previous attack model at', args.pretrain_attack_path)
+
+    model.user_embed_init = torch.empty(model.n_users, model.emb_size).to(device)
+    model.user_embed_init.data.copy_(model.user_embed.data)
 
     """define optimizer"""
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)

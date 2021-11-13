@@ -113,7 +113,7 @@ if __name__ == '__main__':
     attack.to(device)
 
     model.user_embed_init = torch.empty(model.n_users, model.emb_size).to(device)
-    model.user_embed_init.data.copy_(model.user_embed_init.data)
+    model.user_embed_init.data.copy_(model.user_embed.data)
 
     """define optimizer"""
     # update the attack only
@@ -124,47 +124,47 @@ if __name__ == '__main__':
     should_stop = False
 
 
-    # # """Test before training"""
-    # #
-    # # """testing"""
+    # """Test before training"""
     #
-    # train_res = PrettyTable()
-    # train_res.field_names = ["Start", "recall", "ndcg", "precision",
-    #                          "hit_ratio"]
-    #
-    # model.eval()
-    # test_s_t = time()
-    # test_ret = test(model, user_dict, n_params, mode='test')
-    # test_e_t = time()
-    # train_res.add_row(
-    #     ['test start', test_ret['recall'], test_ret['ndcg'],
-    #      test_ret['precision'], test_ret['hit_ratio']])
-    #
-    # wandb.log({'epoch': -1,
-    #            'loss': 0,
-    #            'recall_20': test_ret['recall'][0],
-    #            'recall_40': test_ret['recall'][1],
-    #            'recall_60': test_ret['recall'][2],
-    #            'ndcg_20': test_ret['ndcg'][0],
-    #            'ndcg_40': test_ret['ndcg'][1],
-    #            'ndcg_60': test_ret['ndcg'][2],
-    #            'precision_20': test_ret['precision'][0],
-    #            'precision_40': test_ret['precision'][1],
-    #            'precision_60': test_ret['precision'][2],
-    #            'hit_ratio_20': test_ret['hit_ratio'][0],
-    #            'hit_ratio_40': test_ret['hit_ratio'][1],
-    #            'hit_ratio_60': test_ret['hit_ratio'][2]})
-    #
-    # if user_dict['valid_user_set'] is None:
-    #     valid_ret = test_ret
-    # else:
-    #     test_s_t = time()
-    #     valid_ret = test(model, user_dict, n_params, mode='valid')
-    #     test_e_t = time()
-    #     train_res.add_row(
-    #         ['valid start', valid_ret['recall'], valid_ret['ndcg'],
-    #          valid_ret['precision'], valid_ret['hit_ratio']])
-    # print(train_res)
+    # """testing"""
+
+    train_res = PrettyTable()
+    train_res.field_names = ["Start", "recall", "ndcg", "precision",
+                             "hit_ratio"]
+
+    model.eval()
+    test_s_t = time()
+    test_ret = test(model, user_dict, n_params, mode='test')
+    test_e_t = time()
+    train_res.add_row(
+        ['test start', test_ret['recall'], test_ret['ndcg'],
+         test_ret['precision'], test_ret['hit_ratio']])
+
+    wandb.log({'epoch': -1,
+               'loss': 0,
+               'recall_20': test_ret['recall'][0],
+               'recall_40': test_ret['recall'][1],
+               'recall_60': test_ret['recall'][2],
+               'ndcg_20': test_ret['ndcg'][0],
+               'ndcg_40': test_ret['ndcg'][1],
+               'ndcg_60': test_ret['ndcg'][2],
+               'precision_20': test_ret['precision'][0],
+               'precision_40': test_ret['precision'][1],
+               'precision_60': test_ret['precision'][2],
+               'hit_ratio_20': test_ret['hit_ratio'][0],
+               'hit_ratio_40': test_ret['hit_ratio'][1],
+               'hit_ratio_60': test_ret['hit_ratio'][2]})
+
+    if user_dict['valid_user_set'] is None:
+        valid_ret = test_ret
+    else:
+        test_s_t = time()
+        valid_ret = test(model, user_dict, n_params, mode='valid')
+        test_e_t = time()
+        train_res.add_row(
+            ['valid start', valid_ret['recall'], valid_ret['ndcg'],
+             valid_ret['precision'], valid_ret['hit_ratio']])
+    print(train_res)
 
 
     print("start training ...")

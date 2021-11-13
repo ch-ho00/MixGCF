@@ -3,6 +3,7 @@ import random
 
 import torch
 import numpy as np
+from numpy.random import choice
 
 from time import time
 from tqdm import tqdm
@@ -17,22 +18,49 @@ from utils.helper import early_stopping
 
 n_users = 0
 n_items = 0
+user_gcn_emb = []
+item_gcn_emb = []
 
-
-def get_feed_dict(train_entity_pairs, train_pos_set, start, end, n_negs=1):
+def get_feed_dict(train_entity_pairs, train_pos_set, start, end, k, n_negs=1):
 
     def sampling(user_item, train_set, n):
         neg_items = []
         for user, _ in user_item.cpu().numpy():
             user = int(user)
+            
             negitems = []
-            for i in range(n):  # sample n times
-                while True:
-                    negitem = random.choice(range(n_items))
-                    if negitem not in train_set[user]:
-                        break
-                negitems.append(negitem)
-            neg_items.append(negitems)
+            if user_gcn_emb == []:
+                for i in range(n):  # sample n times
+                    while True:
+                        negitem = random.choice(range(n_items))
+                        if negitem not in train_set[user]:
+                            break
+                    negitems.append(negitem)
+                neg_items.append(negitems)
+            else:
+                #choosing 4n negative items uniformly first
+                for i in range(4*n):  # sample n times
+                    while True:
+                        negitem = random.choice(range(n_items))
+                        if negitem not in train_set[user]:
+                            break
+                    negitems.append(negitem)
+                #assigning probability weights to the 4n items and choosing n of them
+                #directly assigning probability weights to all the negative items take way too much time
+                #if better resource is available, we can try something more than 4n or just skip that step and assign probability weights to all the neg items
+                user_gcn_emb_avg = (1/(k+1))*torch.sum(user_gcn_emb[user],0)
+                weights = [torch.sigmoid(1/torch.dot(user_gcn_emb_avg,(1/(k+1))*torch.sum(item_gcn_emb[i],0))).item() for i in negitems]
+                sum_w = sum(weights)
+                if sum_w != 0:
+                    final_weights = [x/sum_w for x in weights]
+                    selected_negitems = choice(negitems, n, True, final_weights)
+                    selected_negitems = selected_negitems.tolist()
+                else:
+                    #when sum of weights are 0, we just choose the first n negative
+                    selected_negitems = negitems[:n]
+                    
+                neg_items.append(selected_negitems)
+                
         return neg_items
 
     feed_dict = {}
@@ -102,10 +130,10 @@ if __name__ == '__main__':
         while s + args.batch_size <= len(train_cf):
             batch = get_feed_dict(train_cf_,
                                   user_dict['train_user_set'],
-                                  s, s + args.batch_size,
+                                  s, s + args.batch_size, args.context_hops,
                                   n_negs)
-
-            batch_loss, _, _ = model(batch)
+            batch_loss_, user_gcn_emb, item_gcn_emb = model(batch)
+            batch_loss, _, _ = batch_loss_
 
             optimizer.zero_grad()
             batch_loss.backward()
@@ -115,10 +143,9 @@ if __name__ == '__main__':
             s += args.batch_size
 
         train_e_t = time()
-
+        
         if epoch % 5 == 0:
             """testing"""
-
             train_res = PrettyTable()
             train_res.field_names = ["Epoch", "training time(s)", "tesing time(s)", "Loss", "recall", "ndcg", "precision", "hit_ratio"]
 

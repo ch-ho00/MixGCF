@@ -83,6 +83,8 @@ class LightGCN(nn.Module):
         self.K = args_config.K
 
         self.device = torch.device("cuda:0") if args_config.cuda else torch.device("cpu")
+        #if args_config.cuda:
+         #   print("yep")
 
         self._init_weight()
         self.user_embed = nn.Parameter(self.user_embed)
@@ -133,7 +135,7 @@ class LightGCN(nn.Module):
                                                            pos_item))
             neg_gcn_embs = torch.stack(neg_gcn_embs, dim=1)
 
-        return self.create_bpr_loss(user_gcn_emb[user], item_gcn_emb[pos_item], neg_gcn_embs)
+        return self.create_bpr_loss(user_gcn_emb[user], item_gcn_emb[pos_item], neg_gcn_embs), user_gcn_emb, item_gcn_emb
 
     def negative_sampling(self, user_gcn_emb, item_gcn_emb, user, neg_candidates, pos_item):
         batch_size = user.shape[0]
@@ -142,7 +144,8 @@ class LightGCN(nn.Module):
             s_e = self.pooling(s_e).unsqueeze(dim=1)
 
         """positive mixing"""
-        seed = torch.rand(batch_size, 1, p_e.shape[1], 1).to(p_e.device)  # (0, 1)
+        #seed = torch.rand(batch_size, 1, p_e.shape[1], 1).to(p_e.device)  # (0, 1)
+        seed = (1/2)*torch.ones([batch_size, 1, p_e.shape[1], 1], dtype=torch.float32).to(p_e.device)  # (0, 1)
         n_e = item_gcn_emb[neg_candidates]  # [batch_size, n_negs, n_hops, channel]
         n_e_ = seed * p_e.unsqueeze(dim=1) + (1 - seed) * n_e  # mixing
 

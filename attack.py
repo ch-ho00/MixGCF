@@ -179,8 +179,6 @@ if __name__ == '__main__':
         # model.train()
         model.eval()
 
-
-
         loss, s = 0, 0
         hits = 0
         train_s_t = time()
@@ -271,6 +269,17 @@ if __name__ == '__main__':
 
             # just save the model
             if args.save:
+                # Update the attack value
+                with torch.no_grad():
+                    normalized_attack_e_u = attack.attack_e_u / torch.norm(attack.attack_e_u.detach(), dim=1, keepdim=True)
+
+                    user_embed = model.user_embed_init.detach()
+
+                    scale_attack_e_u = args.lambda_a * user_embed.norm(dim=1,
+                                                                       keepdim=True) * normalized_attack_e_u
+                    attack.attack_e_u.data.copy_(scale_attack_e_u.data)
+                    print('finish update the attack scale to lambda_a * norm_e_u')
+
                 os.makedirs(args.out_dir, exist_ok=True)
                 '''save attack model'''
                 torch.save(attack.state_dict(), args.out_dir + 'attack_' + '.ckpt')

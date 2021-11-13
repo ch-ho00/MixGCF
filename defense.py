@@ -125,6 +125,48 @@ if __name__ == '__main__':
     stopping_step = 0
     should_stop = False
 
+    # """Test before training"""
+    #
+    # """testing"""
+
+    train_res = PrettyTable()
+    train_res.field_names = ["Start", "recall", "ndcg", "precision",
+                             "hit_ratio"]
+
+    model.eval()
+    test_s_t = time()
+    test_ret = test(model, user_dict, n_params, mode='test')
+    test_e_t = time()
+    train_res.add_row(
+        ['test start', test_ret['recall'], test_ret['ndcg'],
+         test_ret['precision'], test_ret['hit_ratio']])
+
+    wandb.log({'epoch': -1,
+               'loss': 0,
+               'recall_20': test_ret['recall'][0],
+               'recall_40': test_ret['recall'][1],
+               'recall_60': test_ret['recall'][2],
+               'ndcg_20': test_ret['ndcg'][0],
+               'ndcg_40': test_ret['ndcg'][1],
+               'ndcg_60': test_ret['ndcg'][2],
+               'precision_20': test_ret['precision'][0],
+               'precision_40': test_ret['precision'][1],
+               'precision_60': test_ret['precision'][2],
+               'hit_ratio_20': test_ret['hit_ratio'][0],
+               'hit_ratio_40': test_ret['hit_ratio'][1],
+               'hit_ratio_60': test_ret['hit_ratio'][2]})
+
+    if user_dict['valid_user_set'] is None:
+        valid_ret = test_ret
+    else:
+        test_s_t = time()
+        valid_ret = test(model, user_dict, n_params, mode='valid')
+        test_e_t = time()
+        train_res.add_row(
+            ['valid start', valid_ret['recall'], valid_ret['ndcg'],
+             valid_ret['precision'], valid_ret['hit_ratio']])
+    print(train_res)
+
     print("start training ...")
     for epoch in range(args.epoch):
         # shuffle training data
@@ -139,12 +181,22 @@ if __name__ == '__main__':
         hits = 0
         train_s_t = time()
         while s + args.batch_size <= len(train_cf):
+            # add the attack in the model
+            del model.user_embed
+            # model.user_embed = attack(model.user_embed_init.detach())
+
+            model.user_embed = model.user_embed_init + attack.attack_e_u.detach()
+
             batch = get_feed_dict(train_cf_,
                                   user_dict['train_user_set'],
                                   s, s + args.batch_size,
                                   n_negs)
 
             batch_loss, _, _ = model(batch)
+
+            # adding defense loss
+            inner_product = (model.user_embed * model.user_embed_init).sum(dim=1)
+            batch_loss = batch_loss - torch.sigmoid(inner_product).log().mean()
 
             optimizer.zero_grad()
             batch_loss.backward()
@@ -169,6 +221,22 @@ if __name__ == '__main__':
                 [epoch, train_e_t - train_s_t, test_e_t - test_s_t, loss.item(), test_ret['recall'], test_ret['ndcg'],
                  test_ret['precision'], test_ret['hit_ratio']])
 
+            ''' log the result to weight and bias wandb'''
+            wandb.log({'epoch': epoch,
+                       'loss': loss.item(),
+                       'recall_20': test_ret['recall'][0],
+                       'recall_40': test_ret['recall'][1],
+                       'recall_60': test_ret['recall'][2],
+                       'ndcg_20': test_ret['ndcg'][0],
+                       'ndcg_40': test_ret['ndcg'][1],
+                       'ndcg_60': test_ret['ndcg'][2],
+                       'precision_20': test_ret['precision'][0],
+                       'precision_40': test_ret['precision'][1],
+                       'precision_60': test_ret['precision'][2],
+                       'hit_ratio_20': test_ret['hit_ratio'][0],
+                       'hit_ratio_40': test_ret['hit_ratio'][1],
+                       'hit_ratio_60': test_ret['hit_ratio'][2]})
+
             if user_dict['valid_user_set'] is None:
                 valid_ret = test_ret
             else:
@@ -180,18 +248,28 @@ if __name__ == '__main__':
                      valid_ret['precision'], valid_ret['hit_ratio']])
             print(train_res)
 
-            # *********************************************************
-            # early stopping when cur_best_pre_0 is decreasing for 10 successive steps.
-            cur_best_pre_0, stopping_step, should_stop = early_stopping(valid_ret['recall'][0], cur_best_pre_0,
-                                                                        stopping_step, expected_order='acc',
-                                                                        flag_step=10)
-            if should_stop:
-                break
+            # # *********************************************************
+            # # early stopping when cur_best_pre_0 is decreasing for 10 successive steps.
+            # cur_best_pre_0, stopping_step, should_stop = early_stopping(valid_ret['recall'][0], cur_best_pre_0,
+            #                                                             stopping_step, expected_order='acc',
+            #                                                             flag_step=10)
+            # if should_stop:
+            #     break
+            #
+            # """save weight"""
+            # if valid_ret['recall'][0] == cur_best_pre_0 and args.save:
+            #     os.makedirs(args.out_dir, exist_ok=True)
+            #     torch.save(model.state_dict(), args.out_dir + 'model_' + '.ckpt')
 
-            """save weight"""
-            if valid_ret['recall'][0] == cur_best_pre_0 and args.save:
+            # just save the model
+            if args.save:
                 os.makedirs(args.out_dir, exist_ok=True)
-                torch.save(model.state_dict(), args.out_dir + 'model_' + '.ckpt')
+                '''save defense model'''
+                del model.user_embed
+                # model.user_embed = attack(model.user_embed_init.detach())
+                with torch.no_grad():
+                    model.user_embed = model.user_embed_init + attack.attack_e_u
+                torch.save(model.state_dict(), args.out_dir + 'defense_' + '.ckpt')
         else:
             # logging.info('training loss at epoch %d: %f' % (epoch, loss.item()))
             print('using time %.4fs, training loss at epoch %d: %.4f' % (train_e_t - train_s_t, epoch, loss.item()))

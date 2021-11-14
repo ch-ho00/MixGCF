@@ -185,12 +185,7 @@ if __name__ == '__main__':
         while s + args.batch_size <= len(train_cf):
             # add the attack in the model
             del model.user_embed
-            # model.user_embed = attack(model.user_embed_init.detach())
-            normalized_attack_e_u = attack.attack_e_u / torch.norm(attack.attack_e_u.detach(), dim=1, keepdim=True)
-            user_embed = model.user_embed_init.detach()
-            model.user_embed = user_embed + args.lambda_a * user_embed.norm(dim=1, keepdim=True).mean() * normalized_attack_e_u
-            # print('user embedded',user_embed.norm(dim=1))
-
+            model.user_embed = attack(model.user_embed_init.detach())
 
             batch = get_feed_dict(train_cf_,
                                   user_dict['train_user_set'],
@@ -199,7 +194,11 @@ if __name__ == '__main__':
 
             batch_loss, _, _ = model(batch)
 
-            batch_loss = - batch_loss
+            reg_term = attack.attack_e_u.norm(dim=1,keepdim=True) - model.user_embed_init.detach().norm(dim=1,keepdim=True)
+            reg_term = nn.ReLU()(reg_term)
+            reg_term = reg_term.mean()
+
+            batch_loss = - batch_loss + reg_term*10
 
             optimizer.zero_grad()
             batch_loss.backward()
@@ -217,10 +216,7 @@ if __name__ == '__main__':
 
             # add the attack in the model
             del model.user_embed
-            # model.user_embed = attack(model.user_embed_init.detach())
-            normalized_attack_e_u = attack.attack_e_u / torch.norm(attack.attack_e_u.detach(), dim=1, keepdim=True)
-            user_embed = model.user_embed_init.detach()
-            model.user_embed = user_embed + args.lambda_a * user_embed.norm(dim=1, keepdim=True).mean() * normalized_attack_e_u
+            model.user_embed = attack(model.user_embed_init.detach())
 
             train_res = PrettyTable()
             train_res.field_names = ["Epoch", "training time(s)", "tesing time(s)", "Loss", "recall", "ndcg", "precision", "hit_ratio"]
@@ -277,19 +273,7 @@ if __name__ == '__main__':
 
             # just save the model
             if args.save:
-                # Update the attack value
-                with torch.no_grad():
-                    normalized_attack_e_u = attack.attack_e_u / torch.norm(attack.attack_e_u.detach(), dim=1, keepdim=True)
-
-                    user_embed = model.user_embed_init.detach()
-
-                    scale_attack_e_u = args.lambda_a * user_embed.norm(dim=1,
-                                                                       keepdim=True).mean() * normalized_attack_e_u
-                    attack.attack_e_u.data.copy_(scale_attack_e_u.data)
-                    print('finish update the attack scale to lambda_a * norm_e_u')
-
-
-                os.makedirs(args.out_dir, exist_ok=True)
+                # os.makedirs(args.out_dir, exist_ok=True)
                 '''save attack model'''
                 torch.save(attack.state_dict(), args.out_dir + f'_l_a_{args.lambda_a}'+f'_epoch_{args.epoch}' + '.ckpt')
         else:

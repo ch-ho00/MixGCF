@@ -53,6 +53,10 @@ def parse_args():
 
 
     # ==== attack model ==== #
-    parser.add_argument('--lambda_a', type=float, default=0.01, help='The coefficient for the regularization in the attack model')
+    parser.add_argument('--lambda_a', type=float, default=0.01, help='The coefficient for the scale of attack vector in the attack model')
+
+    # ==== attack model ==== #
+    parser.add_argument('--lambda_d', type=float, default=1, help='The coefficient for the defense term in the defense model')
+
 
     return parser.parse_args()

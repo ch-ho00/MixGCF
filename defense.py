@@ -78,7 +78,7 @@ if __name__ == '__main__':
 
     run = wandb.init(config=args,
                      project='COMP5331-MixGCF-Attack',
-                     name='defense_lightGCN'+args.dataset,
+                     name='defense_lightGCN'+args.dataset+f'defense_l_a{args.lambda_a}_epoch_${args.epoch}',
                      entity="xingzhi"
                      )
 
@@ -183,8 +183,6 @@ if __name__ == '__main__':
         while s + args.batch_size <= len(train_cf):
             # add the attack in the model
             del model.user_embed
-            # model.user_embed = attack(model.user_embed_init.detach())
-
             model.user_embed = model.user_embed_init + attack.attack_e_u.detach()
 
             batch = get_feed_dict(train_cf_,
@@ -196,7 +194,7 @@ if __name__ == '__main__':
 
             # adding defense loss
             inner_product = (model.user_embed * model.user_embed_init).sum(dim=1)
-            batch_loss = batch_loss - torch.sigmoid(inner_product).log().mean()
+            batch_loss = batch_loss - torch.sigmoid(inner_product).log().mean() * args.lambda_d
 
             optimizer.zero_grad()
             batch_loss.backward()
@@ -269,7 +267,7 @@ if __name__ == '__main__':
                 # model.user_embed = attack(model.user_embed_init.detach())
                 with torch.no_grad():
                     model.user_embed = model.user_embed_init + attack.attack_e_u
-                torch.save(model.state_dict(), args.out_dir + 'defense_' + '.ckpt')
+                torch.save(model.state_dict(), args.out_dir + f'_l_a_{args.lambda_a}'+f'_epoch_{args.epoch}' + '.ckpt')
         else:
             # logging.info('training loss at epoch %d: %f' % (epoch, loss.item()))
             print('using time %.4fs, training loss at epoch %d: %.4f' % (train_e_t - train_s_t, epoch, loss.item()))

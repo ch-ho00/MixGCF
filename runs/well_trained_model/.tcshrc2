@@ -1,0 +1,15 @@
+
+# >>> conda initialize >>>
+# !! Contents within this block are managed by 'conda init' !!
+# If not running interactively, return early
+#return
+#[[ $- == *i* ]] || return
+
+if ( -f "/4tssd/data/xzhoubl/anaconda/etc/profile.d/conda.csh" ) then
+    source "/4tssd/data/xzhoubl/anaconda/etc/profile.d/conda.csh"
+else
+    setenv PATH "/4tssd/data/xzhoubl/anaconda/bin:$PATH"
+endif
+/4tssd/data/xzhoubl/anaconda/envs/py36/bin/yarn config set cache-folder /4tssd/data/xzhoubl/cache
+alias python /4tssd/data/xzhoubl/anaconda/envs/py36/bin/python
+# <<< conda initialize <<<

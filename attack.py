@@ -21,14 +21,24 @@ n_users = 0
 n_items = 0
 
 class Attack(nn.Module):
-    def __init__(self, n_users, emb_size):
+    def __init__(self, n_users, n_items, emb_size):
         super(Attack, self).__init__()
         initializer = nn.init.xavier_uniform_
         attack_e_u = initializer(torch.empty(n_users, emb_size))
+        attack_e_v = initializer(torch.empty(n_items, emb_size))
+
         self.attack_e_u = nn.Parameter(attack_e_u)
+        self.attack_e_v = nn.Parameter(attack_e_v)
+
 
     def forward(self,x):
         return x + self.attack_e_u
+
+    def forward_e_u(self,x):
+        return x + self.attack_e_u
+
+    def forward_e_v(self, x):
+        return x + self.attack_e_v
 
 
 
@@ -65,8 +75,9 @@ if __name__ == '__main__':
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True
 
     """read args"""
     global args, device
@@ -109,11 +120,15 @@ if __name__ == '__main__':
 
     # define attack parameters:
 
-    attack = Attack(model.n_users, model.emb_size)
+    attack = Attack(model.n_users, model.n_items, model.emb_size)
     attack.to(device)
 
     model.user_embed_init = torch.empty(model.n_users, model.emb_size).to(device)
     model.user_embed_init.data.copy_(model.user_embed.data)
+
+    model.item_embed_init = torch.empty(model.n_items, model.emb_size).to(device)
+    model.item_embed_init.data.copy_(model.item_embed.data)
+
 
     """define optimizer"""
     # update the attack only
@@ -124,47 +139,47 @@ if __name__ == '__main__':
     should_stop = False
 
 
-    # """Test before training"""
+    # # """Test before training"""
+    # #
+    # # """testing"""
     #
-    # """testing"""
-
-    train_res = PrettyTable()
-    train_res.field_names = ["Start", "recall", "ndcg", "precision",
-                             "hit_ratio"]
-
-    model.eval()
-    test_s_t = time()
-    test_ret = test(model, user_dict, n_params, mode='test')
-    test_e_t = time()
-    train_res.add_row(
-        ['test start', test_ret['recall'], test_ret['ndcg'],
-         test_ret['precision'], test_ret['hit_ratio']])
-
-    wandb.log({'epoch': -1,
-               'loss': 0,
-               'recall_20': test_ret['recall'][0],
-               'recall_40': test_ret['recall'][1],
-               'recall_60': test_ret['recall'][2],
-               'ndcg_20': test_ret['ndcg'][0],
-               'ndcg_40': test_ret['ndcg'][1],
-               'ndcg_60': test_ret['ndcg'][2],
-               'precision_20': test_ret['precision'][0],
-               'precision_40': test_ret['precision'][1],
-               'precision_60': test_ret['precision'][2],
-               'hit_ratio_20': test_ret['hit_ratio'][0],
-               'hit_ratio_40': test_ret['hit_ratio'][1],
-               'hit_ratio_60': test_ret['hit_ratio'][2]})
-
-    if user_dict['valid_user_set'] is None:
-        valid_ret = test_ret
-    else:
-        test_s_t = time()
-        valid_ret = test(model, user_dict, n_params, mode='valid')
-        test_e_t = time()
-        train_res.add_row(
-            ['valid start', valid_ret['recall'], valid_ret['ndcg'],
-             valid_ret['precision'], valid_ret['hit_ratio']])
-    print(train_res)
+    # train_res = PrettyTable()
+    # train_res.field_names = ["Start", "recall", "ndcg", "precision",
+    #                          "hit_ratio"]
+    #
+    # model.eval()
+    # test_s_t = time()
+    # test_ret = test(model, user_dict, n_params, mode='test')
+    # test_e_t = time()
+    # train_res.add_row(
+    #     ['test start', test_ret['recall'], test_ret['ndcg'],
+    #      test_ret['precision'], test_ret['hit_ratio']])
+    #
+    # wandb.log({'epoch': -1,
+    #            'loss': 0,
+    #            'recall_20': test_ret['recall'][0],
+    #            'recall_40': test_ret['recall'][1],
+    #            'recall_60': test_ret['recall'][2],
+    #            'ndcg_20': test_ret['ndcg'][0],
+    #            'ndcg_40': test_ret['ndcg'][1],
+    #            'ndcg_60': test_ret['ndcg'][2],
+    #            'precision_20': test_ret['precision'][0],
+    #            'precision_40': test_ret['precision'][1],
+    #            'precision_60': test_ret['precision'][2],
+    #            'hit_ratio_20': test_ret['hit_ratio'][0],
+    #            'hit_ratio_40': test_ret['hit_ratio'][1],
+    #            'hit_ratio_60': test_ret['hit_ratio'][2]})
+    #
+    # if user_dict['valid_user_set'] is None:
+    #     valid_ret = test_ret
+    # else:
+    #     test_s_t = time()
+    #     valid_ret = test(model, user_dict, n_params, mode='valid')
+    #     test_e_t = time()
+    #     train_res.add_row(
+    #         ['valid start', valid_ret['recall'], valid_ret['ndcg'],
+    #          valid_ret['precision'], valid_ret['hit_ratio']])
+    # print(train_res)
 
 
     print("start training ...")
@@ -185,7 +200,9 @@ if __name__ == '__main__':
         while s + args.batch_size <= len(train_cf):
             # add the attack in the model
             del model.user_embed
-            model.user_embed = attack(model.user_embed_init.detach())
+            del model.item_embed
+            model.user_embed = attack.forward_e_u(model.user_embed_init.detach())
+            model.item_embed = attack.forward_e_v(model.item_embed_init.detach())
 
             batch = get_feed_dict(train_cf_,
                                   user_dict['train_user_set'],
@@ -194,9 +211,14 @@ if __name__ == '__main__':
 
             batch_loss, _, _ = model(batch)
 
-            reg_term = attack.attack_e_u.norm(dim=1,keepdim=True) - model.user_embed_init.detach().norm(dim=1,keepdim=True)
-            reg_term = nn.ReLU()(reg_term)
-            reg_term = reg_term.mean()
+            reg_term_e_u = attack.attack_e_u.norm(dim=1,keepdim=True) - args.lambda_a * model.user_embed_init.detach().norm(dim=1,keepdim=True)
+            reg_term_e_u = nn.ReLU()(reg_term_e_u)
+
+            reg_term_e_v = attack.attack_e_v.norm(dim=1,keepdim=True) - args.lambda_a * model.item_embed_init.detach().norm(dim=1,keepdim=True)
+
+            reg_term_e_v = nn.ReLU()(reg_term_e_v)
+
+            reg_term = reg_term_e_u.mean() + reg_term_e_v.mean()
 
             batch_loss = - batch_loss + reg_term*10
 
@@ -211,12 +233,15 @@ if __name__ == '__main__':
 
         train_e_t = time()
 
-        if epoch % 5 == 0:
+        # if epoch % args.epoch == 0:
+        if epoch == (args.epoch-1):
             """testing"""
 
             # add the attack in the model
             del model.user_embed
-            model.user_embed = attack(model.user_embed_init.detach())
+            del model.item_embed
+            model.user_embed = attack.forward_e_u(model.user_embed_init.detach())
+            model.item_embed = attack.forward_e_v(model.item_embed_init.detach())
 
             train_res = PrettyTable()
             train_res.field_names = ["Epoch", "training time(s)", "tesing time(s)", "Loss", "recall", "ndcg", "precision", "hit_ratio"]
@@ -245,15 +270,15 @@ if __name__ == '__main__':
                        'hit_ratio_40':test_ret['hit_ratio'][1],
                        'hit_ratio_60':test_ret['hit_ratio'][2]})
 
-            if user_dict['valid_user_set'] is None:
-                valid_ret = test_ret
-            else:
-                test_s_t = time()
-                valid_ret = test(model, user_dict, n_params, mode='valid')
-                test_e_t = time()
-                train_res.add_row(
-                    [epoch, train_e_t - train_s_t, test_e_t - test_s_t, loss.item(), valid_ret['recall'], valid_ret['ndcg'],
-                     valid_ret['precision'], valid_ret['hit_ratio']])
+            # if user_dict['valid_user_set'] is None:
+            #     valid_ret = test_ret
+            # else:
+            #     test_s_t = time()
+            #     valid_ret = test(model, user_dict, n_params, mode='valid')
+            #     test_e_t = time()
+            #     train_res.add_row(
+            #         [epoch, train_e_t - train_s_t, test_e_t - test_s_t, loss.item(), valid_ret['recall'], valid_ret['ndcg'],
+            #          valid_ret['precision'], valid_ret['hit_ratio']])
             print(train_res)
 
             # # *********************************************************

@@ -11,6 +11,8 @@ def parse_args():
         "--data_path", nargs="?", default="data/", help="Input data path."
     )
 
+    parser.add_argument("--ckpt", type=str, default=None, help="load ckpt")
+
     # ===== train ===== # 
     parser.add_argument("--gnn", nargs="?", default="ngcf",
                         help="Choose a recommender:[lightgcn, ngcf]")
@@ -54,11 +56,12 @@ def parse_args():
     parser.add_argument('--fair', type=int, default=0, help='lambda mix error loss weight')
     parser.add_argument('--mixup', type=int, default=0, help='lambda fair error loss weight')
     parser.add_argument('--random_sample', type=float, default=0, help='lambda fair error loss weight')
-    parser.add_argument('--expnum', type=int, default=0, help='lambda fair error loss weight')
+    parser.add_argument('--expnum', type=str, default=0, help='lambda fair error loss weight')
     parser.add_argument('--root_dir', type=str, default='./experiments', help='lambda fair error loss weight')
 
     # ===== save model ===== #
     parser.add_argument("--save", type=bool, default=False, help="save model or not")
+    parser.add_argument('--out_gpu', type=int, default=0, help='when using DP')
     parser.add_argument(
         "--out_dir", type=str, default="./weights/yelp2018/", help="output directory for model"
     )

@@ -175,7 +175,7 @@ class NGCF(nn.Module):
         pos_e = self.pooling(pos_gcn_embs)
         neg_e = self.pooling(neg_gcn_embs.view(-1, neg_gcn_embs.shape[2], neg_gcn_embs.shape[3])).view(batch_size, self.K, -1)
 
-        mixup_loss = 0
+        mixup_loss = torch.Tensor([0])
         if self.args.mixup:
             mixup_loss = self.mixup(u_e, pos_e, neg_e, user)
             loss += mixup_loss
@@ -183,23 +183,48 @@ class NGCF(nn.Module):
         pos_scores = torch.sum(torch.mul(u_e, pos_e), axis=1)
         neg_scores = torch.sum(torch.mul(u_e.unsqueeze(dim=1), neg_e), axis=-1)  # [batch_size, K]
 
-        fair_loss = 0
+        fair_loss = torch.Tensor([0])
         if self.args.fair:
             fair_loss = self.fair_reg(pos_scores, neg_scores)
             loss += fair_loss
 
-        if self.save_output and (writer_dict['train_global_steps'] % 500):
-            # import pdb; pdb.set_trace()
-            pos =  writer_dict['train_global_steps']+ " " + " ".join([str(round(s, 3)) for s in pos_scores.detach().cpu().numpy().tolist()])
-            neg =  writer_dict['train_global_steps']+ " "+ " ".join([str(round(s, 3)) for s in neg_scores.detach().cpu().numpy().tolist()])
+        # if self.save_output and (writer_dict['train_global_steps'] % 500):
+        if 1:
+        # if 0 :
+            import pdb; pdb.set_trace()
+            import matplotlib.pyplot as plt
+            plt.hist(pos_scores.detach().cpu().numpy().tolist(), label='positive scores')
+            plt.hist(neg_scores.squeeze(1).detach().cpu().numpy().tolist(), label='negative scores')
+            pmean = round(torch.mean(pos_scores).item(),3)
+            nmean = round(torch.mean(neg_scores).item(),3)
 
-            with open(f'{self.root_dir}/{self.args.expnum}/{args.expname}_pos.txt', 'a') as f:
-                f.write(pos)
-            with open(f'{self.root_dir}/{self.args.exp_num}/{args.expname}_neg.txt', 'a') as f:
-                f.write(neg)
+            plt.xlabel('Scores')
+            plt.ylabel('Frequency')
+            plt.legend()
+            plt.title(f"Positive score mean :{pmean} / Negative score mean : {nmean}", fontsize=15)
+            plt.savefig(f'./{self.args.expnum}.png')
+            plt.clf()
+            diff = pos_scores - neg_scores.squeeze(1)
+            dmean = round(torch.mean(diff).item(),3)
+            diff = diff.detach().cpu().numpy().tolist()
+            plt.hist(diff, bins=20, label='difference in pos/neg score')
+            plt.xlabel('Scores')
+            plt.ylabel('Frequency')
+            plt.title(f'Differnece mean : {dmean}', fontsize=15)
+            plt.legend()
+            plt.savefig(f'./{self.args.expnum}_diff.png')
+            plt.clf()
 
-        # mf_loss = -1 * torch.mean(nn.LogSigmoid()(pos_scores - neg_scores))
-        # mf_loss = torch.mean(nn.functional.softplus((neg_scores - pos_scores.unsqueeze(dim=1)).view(-1)))
+            # pos =   " ".join([str(round(s, 3)) for s in pos_scores.detach().cpu().numpy().tolist()])
+            # neg =  " ".join([str(round(s, 3)) for s in neg_scores.detach().cpu().numpy().tolist()])
+
+            # with open(f'./{args.expname}_pos.txt', 'a') as f:
+            #     f.write(pos)
+            # with open(f'./{args.expname}_neg.txt', 'a') as f:
+            #     f.write(neg)
+
+        mf_loss = -1 * torch.mean(nn.LogSigmoid()(pos_scores - neg_scores))
+        mf_loss = torch.mean(nn.functional.softplus((neg_scores - pos_scores.unsqueeze(dim=1)).view(-1)))
         mf_loss = torch.mean(torch.log(1+torch.exp(neg_scores - pos_scores.unsqueeze(dim=1)).sum(dim=1)))
 
         # cul regularizer

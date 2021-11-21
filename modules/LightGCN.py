@@ -5,7 +5,9 @@ Created on October 1, 2020
 '''
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
+from numpy.random import beta
+import random
 
 class GraphConv(nn.Module):
     """
@@ -70,6 +72,7 @@ class LightGCN(nn.Module):
         self.n_items = data_config['n_items']
         self.adj_mat = adj_mat
 
+        self.args = args_config
         self.decay = args_config.l2
         self.emb_size = args_config.dim
         self.context_hops = args_config.context_hops
@@ -132,8 +135,7 @@ class LightGCN(nn.Module):
                                                            user, neg_item[:, k*self.n_negs: (k+1)*self.n_negs],
                                                            pos_item))
             neg_gcn_embs = torch.stack(neg_gcn_embs, dim=1)
-
-        return self.create_bpr_loss(user_gcn_emb[user], item_gcn_emb[pos_item], neg_gcn_embs)
+        return self.create_bpr_loss(user_gcn_emb[user], item_gcn_emb[pos_item], neg_gcn_embs, user)
 
     def negative_sampling(self, user_gcn_emb, item_gcn_emb, user, neg_candidates, pos_item):
         batch_size = user.shape[0]
@@ -153,6 +155,85 @@ class LightGCN(nn.Module):
         # [batch_size, n_hops+1, channel]
         return neg_items_emb_[[[i] for i in range(batch_size)],
                               range(neg_items_emb_.shape[1]), indices, :]
+
+    def mixup(self, u_e, pos_e, neg_e, user):
+        user_idxs, user_counts = torch.unique(user, return_counts=True)
+        loss_sum = 0
+        gamma = beta(self.args.alpha, self.args.alpha)
+        
+        label_pos_neg = gamma if self.args.alpha_gt else 0
+        label_pos = max(gamma, 1-gamma) if self.args.alpha_gt else 0
+        if self.args.neg_mixup or self.args.pos_mixup:            
+            loss_neg_mix = 0
+            multi_users = user_idxs[user_counts>1]
+            if multi_users.shape[0] > 0:
+                for u_idx in multi_users:
+                    item_idxs = (user == u_idx).nonzero().squeeze(1)
+                    sample = torch.randperm(item_idxs.shape[0])[:2]
+                    sampled_neg_e = neg_e[item_idxs][sample]
+                    sampled_pos_e = pos_e[item_idxs][torch.randperm(item_idxs.shape[0])[sample]]
+ 
+                    if self.args.neg_mixup:
+                        # Item neg_mix
+                        neg_mix = sampled_neg_e[0] * gamma + sampled_neg_e[1] * (1 - gamma)
+                        neg_mix = neg_mix.requires_grad_(True)
+
+                        neg_scores = torch.dot(u_e[item_idxs[0]], neg_mix.squeeze(0)) 
+                            # doesnt matter whether its first one or second one
+                        loss_sum += torch.log(1 + torch.exp(neg_scores)) /  neg_e.shape[0]                   
+
+                        gradx = torch.autograd.grad(neg_scores, neg_mix, create_graph=True)[0].view(neg_mix.shape[0], -1)
+                        x_d = (sampled_neg_e[0] - sampled_neg_e[1]).view(neg_mix.shape[0], -1)
+                        grad_inn = (gradx * x_d).sum(1).view(-1)
+                        loss_grad = torch.abs(grad_inn.mean())
+                        loss_sum += loss_grad /  neg_e.shape[0]                   
+
+                    if self.args.pos_mixup:
+                        # Item neg_mix
+                        pos_mix = sampled_pos_e[0] * gamma + sampled_pos_e[1] * (1 - gamma)
+                        pos_mix = pos_mix.requires_grad_(True)
+
+                        pos_scores = torch.dot(u_e[item_idxs[0]], pos_mix.squeeze(0)) 
+                            # doesnt matter whether its first one or second one
+                        pos_scores = label_pos - pos_scores
+                        loss_sum += torch.log(1 + torch.exp(pos_scores)) /  pos_e.shape[0]                   
+
+                        gradx = torch.autograd.grad(pos_scores, pos_mix, create_graph=True)[0].view(pos_mix.shape[0], -1)
+                        x_d = (sampled_neg_e[0] - sampled_neg_e[1]).view(pos_mix.shape[0], -1)
+                        grad_inn = (gradx * x_d).sum(1).view(-1)
+                        loss_grad = torch.abs(grad_inn.mean())
+                        loss_sum += loss_grad /  pos_e.shape[0]                   
+        # if 'single_mix_weight' in self.args.keys():
+        #     loss_sum = loss_sum * self.args['single_mix_weight']
+
+        if self.args.pos_neg_mixup:
+            # Item neg_mix
+            sampled_idxs = random.sample(list(range(u_e.shape[0])), k=int(u_e.shape[0]* self.args.random_sample))
+            samp_u_e, samp_pos_e, samp_neg_e = u_e[sampled_idxs] , pos_e[sampled_idxs], neg_e[sampled_idxs].squeeze(1)            
+            for u, p, n in zip(samp_u_e, samp_pos_e, samp_neg_e): 
+                pos_neg_mix = p * gamma + n * (1 - gamma)
+                pos_neg_mix = pos_neg_mix.requires_grad_(True)
+
+                # pos_neg_scores = torch.sum(torch.mul(samp_u_e, pos_neg_mix), axis=1) 
+                pos_neg_scores = torch.dot(u, pos_neg_mix.squeeze(0))                       
+                    # doesnt matter whether its first one or second one
+                pos_neg_scores = label_pos_neg - pos_neg_scores
+                loss_sum += torch.log(1 + torch.exp(pos_neg_scores)) /  pos_e.shape[0]                   
+
+                gradx = torch.autograd.grad(pos_neg_scores, pos_neg_mix, create_graph=True)[0].view(pos_mix.shape[0], -1)
+                x_d = (p - n).view(pos_neg_mix.shape[0], -1)
+
+                grad_inn = (gradx * x_d).sum(1).view(-1)
+                loss_grad = torch.abs(grad_inn.mean())
+                loss_sum += loss_grad /  pos_e.shape[0]                   
+
+        return loss_sum * self.args.lambda_mix
+
+    def fair_reg(self, pos_scores, neg_scores):
+        loss_gap = torch.mean(pos_scores) - torch.mean(neg_scores)
+
+        return loss_gap * self.args.lambda_fair
+
 
     def pooling(self, embeddings):
         # [-1, n_hops, channel]
@@ -179,18 +260,30 @@ class LightGCN(nn.Module):
     def rating(self, u_g_embeddings=None, i_g_embeddings=None):
         return torch.matmul(u_g_embeddings, i_g_embeddings.t())
 
-    def create_bpr_loss(self, user_gcn_emb, pos_gcn_embs, neg_gcn_embs):
+    def create_bpr_loss(self, user_gcn_emb, pos_gcn_embs, neg_gcn_embs, user=None):
         # user_gcn_emb: [batch_size, n_hops+1, channel]
         # pos_gcn_embs: [batch_size, n_hops+1, channel]
         # neg_gcn_embs: [batch_size, K, n_hops+1, channel]
-
+        loss = 1
         batch_size = user_gcn_emb.shape[0]
 
         u_e = self.pooling(user_gcn_emb)
         pos_e = self.pooling(pos_gcn_embs)
         neg_e = self.pooling(neg_gcn_embs.view(-1, neg_gcn_embs.shape[2], neg_gcn_embs.shape[3])).view(batch_size, self.K, -1)
 
-        import pdb; pdb.set_trace()
+        mixup_loss = torch.Tensor([0])
+        if self.args.mixup:
+            mixup_loss = self.mixup(u_e, pos_e, neg_e, user)
+            loss += mixup_loss
+
+        pos_scores = torch.sum(torch.mul(u_e, pos_e), axis=1)
+        neg_scores = torch.sum(torch.mul(u_e.unsqueeze(dim=1), neg_e), axis=-1)  # [batch_size, K]
+
+        fair_loss = torch.Tensor([0])
+        if self.args.fair:
+            fair_loss = self.fair_reg(pos_scores, neg_scores)
+            loss += fair_loss
+
         pos_scores = torch.sum(torch.mul(u_e, pos_e), axis=1)
         neg_scores = torch.sum(torch.mul(u_e.unsqueeze(dim=1), neg_e), axis=-1)  # [batch_size, K]
 
@@ -202,4 +295,6 @@ class LightGCN(nn.Module):
                        + torch.norm(neg_gcn_embs[:, :, 0, :]) ** 2) / 2  # take hop=0
         emb_loss = self.decay * regularize / batch_size
 
-        return mf_loss + emb_loss, mf_loss, emb_loss
+        loss += mf_loss + emb_loss
+
+        return loss, mf_loss, emb_loss, mixup_loss, fair_loss

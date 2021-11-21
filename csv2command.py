@@ -1,7 +1,7 @@
 import itertools
 
 hparam_grid = {
-    'dataset' : ['amazon'],
+    'dataset' : ['yelp2018'],
     'dim' : [64],
     'lr' : [1e-4], 
     'l2' : [1e-5],
@@ -14,14 +14,14 @@ hparam_grid = {
     'fair' : [1],
     'mixup' : [1],
     'pool' : ['concat'],
-    'alpha' : [1, 2],
+    'alpha' : [1],
     'alpha_gt' : [0, 1],
     'neg_mixup' : [0, 1],
     'pos_mixup' : [0, 1],
     'pos_neg_mixup'	: [0, 1],
-    'random_sample' : [0.1, 0.3],
-    'lambda_mix' : [1e-3], 
-    'lambda_fair' :  [1e-3],
+    'random_sample' : [0.2],
+    'lambda_mix' : [1e-1, 1e-3], 
+    'lambda_fair' :  [1e-1, 1e-3],
 
 }
 

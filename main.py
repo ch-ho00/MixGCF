@@ -2,6 +2,7 @@ import os
 import random
 
 import torch
+import torch.nn as nn
 import numpy as np
 
 from time import time
@@ -121,6 +122,11 @@ if __name__ == '__main__':
     else:
         model = NGCF(n_params, args, norm_mat).to(device)
 
+    if args.ckpt:
+        model.load_state_dict(torch.load(f'{args.ckpt}'))    
+        print(f"Loaded from {args.ckpt} ###############")
+    # print("Use", torch.cuda.device_count(), "GPUs!")
+    # model = nn.DataParallel(model, device_ids=[0,1,2], output_device=[args.out_gpu])
     """define optimizer"""
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
@@ -149,6 +155,7 @@ if __name__ == '__main__':
         hits = 0
         train_s_t = time()
         while s + args.batch_size <= len(train_cf):
+        # if 0:
             writer_dict['train_global_steps'] = writer_dict['train_global_steps'] + 1
             batch = get_feed_dict(train_cf_,
                                   user_dict['train_user_set'],
@@ -180,6 +187,7 @@ if __name__ == '__main__':
         train_e_t = time()
 
         if epoch % 5 == 0:
+        # if 1:
             """testing"""
 
             train_res = PrettyTable()
@@ -190,42 +198,54 @@ if __name__ == '__main__':
             test_ret = test(model, user_dict, n_params, mode='test')
             test_e_t = time()
             train_res.add_row(
-                [epoch, train_e_t - train_s_t, test_e_t - test_s_t, loss.item(), test_ret['recall'], test_ret['ndcg'],
+                [epoch, train_e_t - train_s_t, test_e_t - test_s_t, loss, test_ret['recall'], test_ret['ndcg'],
                  test_ret['precision'], test_ret['hit_ratio']])
+            
+            # writer_dict['writer'].add_scalar('test_recall1', test_ret['recall'][0].item(), writer_dict['train_global_steps'])
+            # writer_dict['writer'].add_scalar('test_recall2', test_ret['recall'][1].item(), writer_dict['train_global_steps'])
+            # writer_dict['writer'].add_scalar('test_recall3', test_ret['recall'][2].item(), writer_dict['train_global_steps'])
 
-            writer_dict['writer'].add_scalar('test_recall', test_ret['recall'], writer_dict['train_global_steps'])
-            writer_dict['writer'].add_scalar('test_ndcg', test_ret['ndcg'], writer_dict['train_global_steps'])
-            writer_dict['writer'].add_scalar('test_hit_ratio', test_ret['hit_ratio'], writer_dict['train_global_steps'])
-            writer_dict['writer'].add_scalar('test_precision', test_ret['precision'], writer_dict['train_global_steps'])
+            # writer_dict['writer'].add_scalar('test_ndcg1', test_ret['ndcg'][0].item(), writer_dict['train_global_steps'])
+            # writer_dict['writer'].add_scalar('test_ndcg2', test_ret['ndcg'][1].item(), writer_dict['train_global_steps'])
+            # writer_dict['writer'].add_scalar('test_ndcg3', test_ret['ndcg'][2].item(), writer_dict['train_global_steps'])
 
-            if user_dict['valid_user_set'] is None:
-                valid_ret = test_ret
-            else:
-                test_s_t = time()
-                valid_ret = test(model, user_dict, n_params, mode='valid')
-                test_e_t = time()
-                train_res.add_row(
-                    [epoch, train_e_t - train_s_t, test_e_t - test_s_t, loss.item(), valid_ret['recall'], valid_ret['ndcg'],
-                     valid_ret['precision'], valid_ret['hit_ratio']])
+            # writer_dict['writer'].add_scalar('test_hit_ratio1', test_ret['hit_ratio'][0].item(), writer_dict['train_global_steps'])
+            # writer_dict['writer'].add_scalar('test_hit_ratio2', test_ret['hit_ratio'][1].item(), writer_dict['train_global_steps'])
+            # writer_dict['writer'].add_scalar('test_hit_ratio3', test_ret['hit_ratio'][2].item(), writer_dict['train_global_steps'])
 
-                writer_dict['writer'].add_scalar('val_recall', valid_ret['recall'], writer_dict['train_global_steps'])
-                writer_dict['writer'].add_scalar('val_ndcg', valid_ret['ndcg'], writer_dict['train_global_steps'])
-                writer_dict['writer'].add_scalar('val_hit_ratio', valid_ret['hit_ratio'], writer_dict['train_global_steps'])
-                writer_dict['writer'].add_scalar('test_precision', valid_ret['precision'], writer_dict['train_global_steps'])
+            # writer_dict['writer'].add_scalar('test_precision1', test_ret['precision'][0].item(), writer_dict['train_global_steps'])
+            # writer_dict['writer'].add_scalar('test_precision2', test_ret['precision'][1].item(), writer_dict['train_global_steps'])
+            # writer_dict['writer'].add_scalar('test_precision3', test_ret['precision'][2].item(), writer_dict['train_global_steps'])
+            # if user_dict['valid_user_set'] is None:
+            #     valid_ret = test_ret
+            # else:
+            #     test_s_t = time()
+            #     valid_ret = test(model, user_dict, n_params, mode='valid')
+            #     test_e_t = time()
+            #     train_res.add_row(
+            #         [epoch, train_e_t - train_s_t, test_e_t - test_s_t, loss.item(), valid_ret['recall'], valid_ret['ndcg'],
+            #          valid_ret['precision'], valid_ret['hit_ratio']])
 
-            # print(train_res)
+            #     writer_dict['writer'].add_scalar('val_recall', valid_ret['recall'].item(), writer_dict['train_global_steps'])
+            #     writer_dict['writer'].add_scalar('val_ndcg', valid_ret['ndcg'].item(), writer_dict['train_global_steps'])
+            #     writer_dict['writer'].add_scalar('val_hit_ratio', valid_ret['hit_ratio'].item(), writer_dict['train_global_steps'])
+            #     writer_dict['writer'].add_scalar('test_precision', valid_ret['precision'].item(), writer_dict['train_global_steps'])
+
+            print(train_res)
 
             # *********************************************************
             # early stopping when cur_best_pre_0 is decreasing for 10 successive steps.
-            cur_best_pre_0, stopping_step, should_stop = early_stopping(valid_ret['recall'][0], cur_best_pre_0,
+            cur_best_pre_0, stopping_step, should_stop = early_stopping(test_ret['recall'][0], cur_best_pre_0,
                                                                         stopping_step, expected_order='acc',
                                                                         flag_step=10)
             if should_stop:
                 break
 
             """save weight"""
-            if valid_ret['recall'][0] == cur_best_pre_0 and args.save:
-                torch.save(model.state_dict(), os.path.join(args.out_dir, args.expnum, 'weight',  str(writer_dict['train_global_steps'])+'.ckpt'))
+            if test_ret['recall'][0] == cur_best_pre_0:
+                Path(os.path.join(args.out_dir, 'weight')).mkdir(parents=True, exist_ok=True)
+                torch.save(model.state_dict(), os.path.join(args.out_dir, 'weight',  str(writer_dict['train_global_steps'])+'.ckpt'))
+
         else:
             # logging.info('training loss at epoch %d: %f' % (epoch, loss.item()))
             print('using time %.4fs, training loss at epoch %d: %.4f' % (train_e_t - train_s_t, epoch, loss.item()))
